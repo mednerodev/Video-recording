@@ -72,6 +72,12 @@ a.button {
   gap: 8px;
 }
 
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .dot {
   width: 9px;
   height: 9px;
@@ -265,6 +271,92 @@ a.button {
   pointer-events: none;
 }
 
+.recordings-shell {
+  grid-template-rows: auto 1fr;
+}
+
+.recordings-content {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.9fr) minmax(0, 1.1fr);
+  gap: 20px;
+  padding: 20px;
+  min-height: 0;
+}
+
+.player-panel {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.player {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #060708;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.player-empty {
+  aspect-ratio: 16 / 9;
+  min-height: 0;
+}
+
+.recording-list {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.recording-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 14px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 8px;
+}
+
+.recording-row.selected {
+  border-color: var(--accent);
+}
+
+.recording-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.recording-main strong,
+.recording-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recording-main span,
+.recording-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.recording-meta {
+  display: grid;
+  gap: 4px;
+  min-width: 140px;
+}
+
+.recording-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 @media (max-width: 860px) {
   .content {
     grid-template-columns: 1fr;
@@ -273,5 +365,17 @@ a.button {
   .side {
     border-left: 0;
     border-top: 1px solid var(--line);
+  }
+
+  .recordings-content {
+    grid-template-columns: 1fr;
+  }
+
+  .recording-row {
+    grid-template-columns: 1fr;
+  }
+
+  .recording-actions {
+    justify-content: flex-start;
   }
 }

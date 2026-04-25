@@ -1,6 +1,7 @@
 "use client";
 
 import AgoraRTC from "agora-rtc-sdk-ng";
+import Link from "next/link";
 import type {
   IAgoraRTCClient,
   IAgoraRTCRemoteUser,
@@ -94,8 +95,10 @@ export default function Home() {
   const [cameraEnabled, setCameraEnabled] = useState(true);
   const [localRecording, setLocalRecording] = useState(false);
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
+  const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null);
   const [recordingFormat, setRecordingFormat] = useState<RecordingFormat>("webm");
   const [recordingExtension, setRecordingExtension] = useState<RecordingFormat>("webm");
+  const [uploading, setUploading] = useState(false);
 
   const clientRef = useRef<IAgoraRTCClient | null>(null);
   const videoGridRef = useRef<HTMLDivElement | null>(null);
@@ -217,6 +220,7 @@ export default function Home() {
         URL.revokeObjectURL(recordingUrlRef.current);
         recordingUrlRef.current = null;
         setRecordingUrl(null);
+        setRecordingBlob(null);
       }
 
       const canvas = recordingCanvasRef.current;
@@ -338,6 +342,7 @@ export default function Home() {
         const url = URL.createObjectURL(blob);
         recordingUrlRef.current = url;
         setRecordingUrl(url);
+        setRecordingBlob(blob);
         setLocalRecording(false);
         cleanupRecordingStream();
         recordingStreamRef.current = null;
@@ -384,6 +389,39 @@ export default function Home() {
     setLocalRecording(false);
   }
 
+  async function uploadRecording() {
+    if (!recordingBlob) {
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const filename = `${normalizedChannelName || "call"}-recording.${recordingExtension}`;
+      const formData = new FormData();
+      formData.append("file", recordingBlob, filename);
+      formData.append("channelName", normalizedChannelName || "call");
+
+      const response = await fetch("/api/recordings/upload", {
+        method: "POST",
+        body: formData,
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        s3Uri?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(payload.error || `Upload failed with ${response.status}`);
+      }
+
+      setMessage(`Uploaded recording to ${payload.s3Uri}.`);
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    } finally {
+      setUploading(false);
+    }
+  }
+
   return (
     <main className="shell">
       <header className="topbar">
@@ -392,6 +430,9 @@ export default function Home() {
           <span>Channel audio/video with local browser recording</span>
         </div>
         <div className="status">
+          <Link className="button" href="/recordings">
+            Recordings
+          </Link>
           <span className={`dot ${localRecording ? "recording" : joined ? "live" : ""}`} />
           {localRecording ? "Recording" : joined ? "Live" : "Offline"}
         </div>
@@ -483,6 +524,16 @@ export default function Home() {
             >
               Download Recording
             </a>
+          ) : null}
+          {recordingBlob ? (
+            <button
+              className="button full"
+              type="button"
+              onClick={uploadRecording}
+              disabled={uploading || busy}
+            >
+              {uploading ? "Uploading..." : "Upload to S3"}
+            </button>
           ) : null}
 
           <div className="message">{message}</div>
