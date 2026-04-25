@@ -8,7 +8,11 @@ export async function POST(request: Request) {
   try {
     const formData = await request.formData();
     const file = formData.get("file");
+    const thumbnail = formData.get("thumbnail");
     const channelName = safeName(String(formData.get("channelName") || "call"));
+    const title = String(formData.get("title") || "Untitled recording").slice(0, 120);
+    const duration = String(formData.get("duration") || "0");
+    const format = safeName(String(formData.get("format") || "webm"));
 
     if (!(file instanceof File)) {
       return NextResponse.json({ error: "Recording file is required." }, { status: 400 });
@@ -17,6 +21,24 @@ export async function POST(request: Request) {
     const bucket = getS3Bucket();
     const extension = safeName(file.name.split(".").pop() || "webm") || "webm";
     const key = `recordings/${channelName}/${Date.now()}-${safeName(file.name) || `recording.${extension}`}`;
+    const thumbnailKey =
+      thumbnail instanceof File ? key.replace(/\.[^.]+$/, "-thumbnail.jpg") : "";
+
+    if (thumbnail instanceof File) {
+      await getS3Client().send(
+        new PutObjectCommand({
+          Bucket: bucket,
+          Key: thumbnailKey,
+          Body: Buffer.from(await thumbnail.arrayBuffer()),
+          ContentType: thumbnail.type || "image/jpeg",
+          Metadata: {
+            title,
+            room: channelName,
+            sourceKey: key,
+          },
+        }),
+      );
+    }
 
     await getS3Client().send(
       new PutObjectCommand({
@@ -24,6 +46,14 @@ export async function POST(request: Request) {
         Key: key,
         Body: Buffer.from(await file.arrayBuffer()),
         ContentType: file.type || `video/${extension}`,
+        Metadata: {
+          title,
+          room: channelName,
+          duration,
+          format,
+          uploadedAt: new Date().toISOString(),
+          thumbnailKey,
+        },
       }),
     );
 

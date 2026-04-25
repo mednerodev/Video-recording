@@ -8,6 +8,15 @@ type Recording = {
   name: string;
   size: number;
   lastModified: string | null;
+  metadata?: {
+    title?: string;
+    room?: string;
+    duration?: number;
+    format?: string;
+    uploadedAt?: string;
+    thumbnailKey?: string;
+    thumbnailUrl?: string;
+  };
 };
 
 function getErrorMessage(error: unknown) {
@@ -21,6 +30,12 @@ function formatBytes(bytes: number) {
   const units = ["B", "KB", "MB", "GB"];
   const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+function formatDuration(totalSeconds = 0) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 async function postJson<T>(url: string, body: unknown) {
@@ -45,11 +60,34 @@ export default function RecordingsPage() {
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
   const [message, setMessage] = useState("Loading recordings...");
   const [busy, setBusy] = useState(false);
+  const [query, setQuery] = useState("");
 
   const selectedRecording = useMemo(
     () => recordings.find((recording) => recording.key === selectedKey) || null,
     [recordings, selectedKey],
   );
+  const filteredRecordings = useMemo(() => {
+    const value = query.trim().toLowerCase();
+    if (!value) {
+      return recordings;
+    }
+
+    return recordings.filter((recording) => {
+      return [
+        recording.name,
+        recording.key,
+        recording.metadata?.title,
+        recording.metadata?.room,
+        recording.metadata?.format,
+        recording.metadata?.uploadedAt,
+        recording.lastModified,
+        recording.lastModified ? new Date(recording.lastModified).toLocaleDateString() : "",
+        recording.lastModified ? new Date(recording.lastModified).toLocaleString() : "",
+      ]
+        .filter(Boolean)
+        .some((item) => String(item).toLowerCase().includes(value));
+    });
+  }, [query, recordings]);
 
   async function loadRecordings() {
     setBusy(true);
@@ -110,6 +148,33 @@ export default function RecordingsPage() {
     }
   }
 
+  async function renameRecording(recording: Recording) {
+    const currentTitle = recording.metadata?.title || recording.name.replace(/\.[^.]+$/, "");
+    const title = window.prompt("Recording title", currentTitle);
+
+    if (!title || title.trim() === currentTitle) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const { key } = await postJson<{ key: string }>("/api/recordings/rename", {
+        key: recording.key,
+        title: title.trim(),
+      });
+      if (selectedKey === recording.key) {
+        setSelectedKey(key);
+        setPlaybackUrl(null);
+      }
+      setMessage("Recording renamed. Select it again to refresh the signed playback URL.");
+      await loadRecordings();
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   useEffect(() => {
     loadRecordings();
   }, []);
@@ -141,22 +206,51 @@ export default function RecordingsPage() {
             </div>
           )}
           <div className="message">
-            {selectedRecording ? `${selectedRecording.name}\n${selectedRecording.key}` : message}
+            {selectedRecording
+              ? `${selectedRecording.metadata?.title || selectedRecording.name}
+Room: ${selectedRecording.metadata?.room || "-"}
+Date: ${
+                  selectedRecording.lastModified
+                    ? new Date(selectedRecording.lastModified).toLocaleString()
+                    : "-"
+                }
+Size: ${formatBytes(selectedRecording.size)}
+Duration: ${formatDuration(selectedRecording.metadata?.duration)}
+Format: ${selectedRecording.metadata?.format || "-"}
+${selectedRecording.key}`
+              : message}
           </div>
         </section>
 
         <section className="recording-list">
-          {recordings.map((recording) => (
+          <div className="field">
+            <label htmlFor="recording-search">Search</label>
+            <input
+              id="recording-search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Title, room, format, file"
+            />
+          </div>
+          {filteredRecordings.map((recording) => (
             <article
               className={`recording-row ${recording.key === selectedKey ? "selected" : ""}`}
               key={recording.key}
             >
+              <div className="recording-thumb">
+                {recording.metadata?.thumbnailUrl ? (
+                  <img src={recording.metadata.thumbnailUrl} alt="" />
+                ) : (
+                  <span>No thumbnail</span>
+                )}
+              </div>
               <div className="recording-main">
-                <strong>{recording.name}</strong>
-                <span>{recording.key}</span>
+                <strong>{recording.metadata?.title || recording.name}</strong>
+                <span>{recording.metadata?.room || "Unknown room"} · {recording.key}</span>
               </div>
               <div className="recording-meta">
                 <span>{formatBytes(recording.size)}</span>
+                <span>{formatDuration(recording.metadata?.duration)} · {recording.metadata?.format || "video"}</span>
                 <span>
                   {recording.lastModified
                     ? new Date(recording.lastModified).toLocaleString()
@@ -166,6 +260,9 @@ export default function RecordingsPage() {
               <div className="recording-actions">
                 <button className="button primary" type="button" onClick={() => playRecording(recording.key)} disabled={busy}>
                   Play
+                </button>
+                <button className="button" type="button" onClick={() => renameRecording(recording)} disabled={busy}>
+                  Rename
                 </button>
                 {recording.key === selectedKey && playbackUrl ? (
                   <a className="button download" href={playbackUrl} download={recording.name}>

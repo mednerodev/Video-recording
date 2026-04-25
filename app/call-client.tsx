@@ -21,6 +21,10 @@ type WebkitAudioWindow = Window &
   };
 
 type RecordingFormat = "webm" | "mp4";
+type NetworkQuality = {
+  downlinkNetworkQuality?: number;
+  uplinkNetworkQuality?: number;
+};
 
 const recordingMimeTypes: Record<RecordingFormat, string[]> = {
   webm: ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"],
@@ -28,11 +32,88 @@ const recordingMimeTypes: Record<RecordingFormat, string[]> = {
 };
 
 function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "Something went wrong.";
+  if (!(error instanceof Error)) {
+    return "Something went wrong.";
+  }
+
+  const text = `${error.name} ${error.message}`;
+
+  if (text.includes("NotAllowedError") || text.includes("PERMISSION_DENIED")) {
+    return "Camera or microphone permission was blocked. Click the lock icon in the address bar, allow camera and microphone, then try joining again.";
+  }
+
+  if (text.includes("NotFoundError") || text.includes("DEVICE_NOT_FOUND")) {
+    return "No camera or microphone was found on this device.";
+  }
+
+  if (text.includes("NotReadableError") || text.includes("TRACK_IS_DISABLED")) {
+    return "The camera or microphone could not be started. Close other apps using them, then try again.";
+  }
+
+  if (text.includes("NotSecureError")) {
+    return "Camera and microphone require a secure page. Use http://127.0.0.1:3000 locally or HTTPS in production.";
+  }
+
+  if (error.message.includes("NEXT_PUBLIC_AGORA_APP_ID")) {
+    return "Agora App ID is missing. Check .env.local and restart the dev server.";
+  }
+
+  if (error.message.includes("AGORA_APP_CERTIFICATE")) {
+    return "Agora App Certificate is missing. Check .env.local and restart the dev server.";
+  }
+
+  if (error.message.includes("AWS_")) {
+    return `${error.message} Check .env.local and restart the dev server.`;
+  }
+
+  return error.message;
 }
 
 function getSupportedMimeType(format: RecordingFormat) {
   return recordingMimeTypes[format].find((mimeType) => MediaRecorder.isTypeSupported(mimeType));
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type = "image/jpeg", quality = 0.82) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) {
+        resolve(blob);
+      } else {
+        reject(new Error("Unable to create recording thumbnail."));
+      }
+    }, type, quality);
+  });
+}
+
+function formatDuration(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function getNetworkLabel(value?: number) {
+  if (!value) {
+    return "Unknown";
+  }
+  if (value <= 2) {
+    return "Good";
+  }
+  if (value <= 4) {
+    return "Fair";
+  }
+  return "Poor";
+}
+
+async function ensureMediaPermissions() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error("Camera and microphone are not available in this browser.");
+  }
+
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: true,
+    video: true,
+  });
+  stream.getTracks().forEach((track) => track.stop());
 }
 
 async function postJson<T>(url: string, body: unknown) {
@@ -85,20 +166,33 @@ function VideoTile({
 
 export default function Home() {
   const [channelName, setChannelName] = useState("demo-room");
+  const [displayName, setDisplayName] = useState("Guest");
   const [uid] = useState(() => Math.floor(10000 + Math.random() * 90000));
   const [joined, setJoined] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("Ready. Enter a room name and join the call.");
+  const [connectionStatus, setConnectionStatus] = useState("Idle");
+  const [networkQuality, setNetworkQuality] = useState<NetworkQuality>({});
+  const [userNames, setUserNames] = useState<Record<string, string>>({});
   const [remoteUsers, setRemoteUsers] = useState<IAgoraRTCRemoteUser[]>([]);
   const [localTracks, setLocalTracks] = useState<LocalTracks | null>(null);
+  const [microphones, setMicrophones] = useState<MediaDeviceInfo[]>([]);
+  const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
+  const [selectedMicId, setSelectedMicId] = useState("");
+  const [selectedCameraId, setSelectedCameraId] = useState("");
   const [micEnabled, setMicEnabled] = useState(true);
   const [cameraEnabled, setCameraEnabled] = useState(true);
   const [localRecording, setLocalRecording] = useState(false);
+  const [recordingTitle, setRecordingTitle] = useState("");
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
   const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null);
+  const [thumbnailBlob, setThumbnailBlob] = useState<Blob | null>(null);
   const [recordingFormat, setRecordingFormat] = useState<RecordingFormat>("webm");
   const [recordingExtension, setRecordingExtension] = useState<RecordingFormat>("webm");
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [recordingAudioCount, setRecordingAudioCount] = useState(0);
 
   const clientRef = useRef<IAgoraRTCClient | null>(null);
   const videoGridRef = useRef<HTMLDivElement | null>(null);
@@ -109,24 +203,103 @@ export default function Home() {
   const recordingFrameRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioSourceNodesRef = useRef<MediaStreamAudioSourceNode[]>([]);
+  const audioDestinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+  const recordedAudioTrackIdsRef = useRef<Set<string>>(new Set());
+  const localRecordingRef = useRef(false);
+  const recordingStartedAtRef = useRef<number | null>(null);
   const normalizedChannelName = useMemo(() => channelName.trim(), [channelName]);
+  const normalizedDisplayName = useMemo(() => displayName.trim() || "Guest", [displayName]);
+  const mp4Supported = getSupportedMimeType("mp4") !== undefined;
+  const shareUrl = useMemo(() => {
+    if (typeof window === "undefined") {
+      return "";
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.set("room", normalizedChannelName || "demo-room");
+    return url.toString();
+  }, [normalizedChannelName]);
 
   useEffect(() => {
+    localRecordingRef.current = localRecording;
+  }, [localRecording]);
+
+  useEffect(() => {
+    const room = new URLSearchParams(window.location.search).get("room");
+    if (room) {
+      setChannelName(room);
+    }
+  }, []);
+
+  async function refreshDevices() {
+    if (!navigator.mediaDevices?.enumerateDevices) {
+      return;
+    }
+
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const audioInputs = devices.filter((device) => device.kind === "audioinput");
+    const videoInputs = devices.filter((device) => device.kind === "videoinput");
+    setMicrophones(audioInputs);
+    setCameras(videoInputs);
+    setSelectedMicId((current) => current || audioInputs[0]?.deviceId || "");
+    setSelectedCameraId((current) => current || videoInputs[0]?.deviceId || "");
+  }
+
+  useEffect(() => {
+    refreshDevices().catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!localRecording) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      if (recordingStartedAtRef.current) {
+        setRecordingSeconds(Math.floor((Date.now() - recordingStartedAtRef.current) / 1000));
+      }
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [localRecording]);
+
+  useEffect(() => {
+    AgoraRTC.setLogLevel(4);
     const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
     clientRef.current = client;
 
-    const syncUsers = () => setRemoteUsers([...client.remoteUsers]);
+    const syncUsers = () => {
+      setRemoteUsers([...client.remoteUsers]);
+      client.remoteUsers.forEach((user) => {
+        setUserNames((names) => ({
+          ...names,
+          [String(user.uid)]: names[String(user.uid)] || `Guest ${String(user.uid)}`,
+        }));
+      });
+    };
 
     client.on("user-published", async (user, mediaType) => {
-      await client.subscribe(user, mediaType);
-      if (mediaType === "audio") {
-        user.audioTrack?.play();
+      try {
+        await client.subscribe(user, mediaType);
+        if (mediaType === "audio") {
+          user.audioTrack?.play();
+          if (localRecordingRef.current) {
+            addAudioTrackToRecording(user.audioTrack?.getMediaStreamTrack());
+          }
+        }
+        syncUsers();
+      } catch (error) {
+        setMessage(`Agora subscribe failed: ${getErrorMessage(error)}`);
       }
-      syncUsers();
     });
 
     client.on("user-unpublished", syncUsers);
     client.on("user-left", syncUsers);
+    client.on("connection-state-change", (curState, prevState, reason) => {
+      setConnectionStatus(reason ? `${curState} (${reason})` : curState);
+    });
+    client.on("network-quality", (stats) => {
+      setNetworkQuality(stats);
+    });
 
     return () => {
       client.removeAllListeners();
@@ -152,7 +325,12 @@ export default function Home() {
           uid,
         },
       );
-      const tracks = await AgoraRTC.createMicrophoneAndCameraTracks();
+      await ensureMediaPermissions();
+      await refreshDevices();
+      const tracks = await AgoraRTC.createMicrophoneAndCameraTracks(
+        selectedMicId ? { microphoneId: selectedMicId } : undefined,
+        selectedCameraId ? { cameraId: selectedCameraId } : undefined,
+      );
 
       await clientRef.current.join(appId, normalizedChannelName, token, uid);
       await clientRef.current.publish([tracks[0], tracks[1]]);
@@ -161,9 +339,13 @@ export default function Home() {
       setJoined(true);
       setMicEnabled(true);
       setCameraEnabled(true);
+      setUserNames((names) => ({
+        ...names,
+        [String(uid)]: normalizedDisplayName,
+      }));
       setMessage(`Joined ${normalizedChannelName} as ${uid}.`);
     } catch (error) {
-      setMessage(getErrorMessage(error));
+      setMessage(`Join failed: ${getErrorMessage(error)}`);
     } finally {
       setBusy(false);
     }
@@ -185,7 +367,7 @@ export default function Home() {
       setJoined(false);
       setMessage("Left the call.");
     } catch (error) {
-      setMessage(getErrorMessage(error));
+      setMessage(`Leave failed: ${getErrorMessage(error)}`);
     } finally {
       setBusy(false);
     }
@@ -195,18 +377,64 @@ export default function Home() {
     if (!localTracks) {
       return;
     }
-    const next = !micEnabled;
-    await localTracks.audioTrack.setEnabled(next);
-    setMicEnabled(next);
+    try {
+      const next = !micEnabled;
+      await localTracks.audioTrack.setEnabled(next);
+      setMicEnabled(next);
+    } catch (error) {
+      setMessage(`Mic toggle failed: ${getErrorMessage(error)}`);
+    }
   }
 
   async function toggleCamera() {
     if (!localTracks) {
       return;
     }
-    const next = !cameraEnabled;
-    await localTracks.videoTrack.setEnabled(next);
-    setCameraEnabled(next);
+    try {
+      const next = !cameraEnabled;
+      await localTracks.videoTrack.setEnabled(next);
+      setCameraEnabled(next);
+    } catch (error) {
+      setMessage(`Camera toggle failed: ${getErrorMessage(error)}`);
+    }
+  }
+
+  async function copyRoomLink() {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setMessage("Room link copied.");
+    } catch {
+      setMessage(shareUrl);
+    }
+  }
+
+  async function createAudioMixer(outputStream: MediaStream) {
+    const audioWindow = window as WebkitAudioWindow;
+    const AudioContextClass = audioWindow.AudioContext || audioWindow.webkitAudioContext;
+    if (!AudioContextClass) {
+      throw new Error("Audio recording is not supported in this browser.");
+    }
+
+    const audioContext = new AudioContextClass();
+    await audioContext.resume();
+    audioContextRef.current = audioContext;
+    audioDestinationRef.current = audioContext.createMediaStreamDestination();
+    audioDestinationRef.current.stream.getAudioTracks().forEach((track) => outputStream.addTrack(track));
+  }
+
+  function addAudioTrackToRecording(track?: MediaStreamTrack) {
+    const audioContext = audioContextRef.current;
+    const destination = audioDestinationRef.current;
+
+    if (!track || !audioContext || !destination || recordedAudioTrackIdsRef.current.has(track.id)) {
+      return;
+    }
+
+    const source = audioContext.createMediaStreamSource(new MediaStream([track]));
+    source.connect(destination);
+    audioSourceNodesRef.current.push(source);
+    recordedAudioTrackIdsRef.current.add(track.id);
+    setRecordingAudioCount(recordedAudioTrackIdsRef.current.size);
   }
 
   async function startLocalRecording() {
@@ -221,6 +449,8 @@ export default function Home() {
         recordingUrlRef.current = null;
         setRecordingUrl(null);
         setRecordingBlob(null);
+        setThumbnailBlob(null);
+        setUploadProgress(0);
       }
 
       const canvas = recordingCanvasRef.current;
@@ -235,36 +465,11 @@ export default function Home() {
       canvas.height = 720;
       const canvasStream = canvas.captureStream(30);
       const outputStream = new MediaStream(canvasStream.getVideoTracks());
-      const audioTracks: MediaStreamTrack[] = [];
-
-      if (localTracks?.audioTrack) {
-        audioTracks.push(localTracks.audioTrack.getMediaStreamTrack());
-      }
-      remoteUsers.forEach((user) => {
-        const track = user.audioTrack?.getMediaStreamTrack();
-        if (track) {
-          audioTracks.push(track);
-        }
-      });
-
-      if (audioTracks.length > 0) {
-        const audioWindow = window as WebkitAudioWindow;
-        const AudioContextClass = audioWindow.AudioContext || audioWindow.webkitAudioContext;
-        if (!AudioContextClass) {
-          throw new Error("Audio recording is not supported in this browser.");
-        }
-        const audioContext = new AudioContextClass();
-        await audioContext.resume();
-        audioContextRef.current = audioContext;
-        const destination = audioContext.createMediaStreamDestination();
-
-        audioTracks.forEach((track) => {
-          const source = audioContext.createMediaStreamSource(new MediaStream([track]));
-          source.connect(destination);
-          audioSourceNodesRef.current.push(source);
-        });
-        destination.stream.getAudioTracks().forEach((track) => outputStream.addTrack(track));
-      }
+      setRecordingAudioCount(0);
+      recordedAudioTrackIdsRef.current = new Set();
+      await createAudioMixer(outputStream);
+      addAudioTrackToRecording(localTracks?.audioTrack.getMediaStreamTrack());
+      remoteUsers.forEach((user) => addAudioTrackToRecording(user.audioTrack?.getMediaStreamTrack()));
 
       const drawFrame = () => {
         const tiles = Array.from(grid.querySelectorAll<HTMLElement>(".tile"));
@@ -321,42 +526,56 @@ export default function Home() {
       drawFrame();
 
       const chunks: BlobPart[] = [];
-      const mimeType = getSupportedMimeType(recordingFormat);
+      let finalFormat = recordingFormat;
+      let mimeType = getSupportedMimeType(finalFormat);
 
       if (!mimeType) {
-        throw new Error(`${recordingFormat.toUpperCase()} recording is not supported in this browser.`);
+        if (recordingFormat === "mp4") {
+          finalFormat = "webm";
+          mimeType = getSupportedMimeType("webm");
+          setMessage("MP4 recording is not supported in this browser, so this recording will use WebM.");
+        }
+
+        if (!mimeType) {
+          throw new Error(`${recordingFormat.toUpperCase()} recording is not supported in this browser.`);
+        }
       }
 
       const recorder = new MediaRecorder(outputStream, {
         mimeType,
       });
-      setRecordingExtension(recordingFormat);
+      setRecordingExtension(finalFormat);
 
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           chunks.push(event.data);
         }
       };
-      recorder.onstop = () => {
+      recorder.onstop = async () => {
         const blob = new Blob(chunks, { type: recorder.mimeType || "video/webm" });
+        const thumbnail = await canvasToBlob(canvas).catch(() => null);
         const url = URL.createObjectURL(blob);
         recordingUrlRef.current = url;
         setRecordingUrl(url);
         setRecordingBlob(blob);
+        setThumbnailBlob(thumbnail);
         setLocalRecording(false);
         cleanupRecordingStream();
         recordingStreamRef.current = null;
         recorderRef.current = null;
-        setMessage("Local recording is ready to download.");
+        setMessage("Local recording is ready. Uploading to S3...");
+        uploadBlob(blob, `${normalizedChannelName || "call"}-recording.${finalFormat}`, finalFormat, thumbnail);
       };
 
       recordingStreamRef.current = outputStream;
       recorderRef.current = recorder;
+      recordingStartedAtRef.current = Date.now();
+      setRecordingSeconds(0);
       recorder.start(1000);
       setLocalRecording(true);
-      setMessage(`Local recording started with ${audioTracks.length} audio track(s).`);
+      setMessage(`Local recording started with ${recordedAudioTrackIdsRef.current.size} audio track(s).`);
     } catch (error) {
-      setMessage(getErrorMessage(error));
+      setMessage(`Recording failed: ${getErrorMessage(error)}`);
       cleanupRecordingStream();
       recordingStreamRef.current = null;
     } finally {
@@ -372,6 +591,10 @@ export default function Home() {
     recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
     audioSourceNodesRef.current.forEach((source) => source.disconnect());
     audioSourceNodesRef.current = [];
+    audioDestinationRef.current = null;
+    recordedAudioTrackIdsRef.current = new Set();
+    setRecordingAudioCount(0);
+    recordingStartedAtRef.current = null;
     audioContextRef.current?.close().catch(() => undefined);
     audioContextRef.current = null;
   }
@@ -389,37 +612,60 @@ export default function Home() {
     setLocalRecording(false);
   }
 
-  async function uploadRecording() {
-    if (!recordingBlob) {
-      return;
+  function uploadBlob(
+    blob: Blob,
+    filename: string,
+    format = recordingExtension,
+    thumbnail = thumbnailBlob,
+  ) {
+    setUploading(true);
+    setUploadProgress(0);
+
+    const formData = new FormData();
+    formData.append("file", blob, filename);
+    formData.append("channelName", normalizedChannelName || "call");
+    formData.append("title", recordingTitle.trim() || filename.replace(/\.[^.]+$/, ""));
+    formData.append("duration", String(recordingSeconds));
+    formData.append("format", format);
+    if (thumbnail) {
+      formData.append("thumbnail", thumbnail, filename.replace(/\.[^.]+$/, ".jpg"));
     }
 
-    setUploading(true);
-    try {
-      const filename = `${normalizedChannelName || "call"}-recording.${recordingExtension}`;
-      const formData = new FormData();
-      formData.append("file", recordingBlob, filename);
-      formData.append("channelName", normalizedChannelName || "call");
-
-      const response = await fetch("/api/recordings/upload", {
-        method: "POST",
-        body: formData,
-      });
-      const payload = (await response.json().catch(() => ({}))) as {
+    const request = new XMLHttpRequest();
+    request.open("POST", "/api/recordings/upload");
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        setUploadProgress(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+    request.onload = () => {
+      setUploading(false);
+      const payload = JSON.parse(request.responseText || "{}") as {
         error?: string;
         s3Uri?: string;
       };
 
-      if (!response.ok) {
-        throw new Error(payload.error || `Upload failed with ${response.status}`);
+      if (request.status < 200 || request.status >= 300) {
+        setMessage(`Upload failed: ${payload.error || `HTTP ${request.status}`}`);
+        return;
       }
 
+      setUploadProgress(100);
       setMessage(`Uploaded recording to ${payload.s3Uri}.`);
-    } catch (error) {
-      setMessage(getErrorMessage(error));
-    } finally {
+    };
+    request.onerror = () => {
       setUploading(false);
+      setMessage("Upload failed: network error while sending the recording to S3.");
+    };
+    request.send(formData);
+  }
+
+  function uploadRecording() {
+    if (!recordingBlob) {
+      return;
     }
+
+    uploadBlob(recordingBlob, `${normalizedChannelName || "call"}-recording.${recordingExtension}`);
   }
 
   return (
@@ -442,11 +688,11 @@ export default function Home() {
         <section className="stage">
           {joined ? (
             <div className="video-grid" ref={videoGridRef}>
-              <VideoTile label={`You (${uid})`} track={localTracks?.videoTrack} />
+              <VideoTile label={`${normalizedDisplayName} (${uid})`} track={localTracks?.videoTrack} />
               {remoteUsers.map((user) => (
                 <VideoTile
                   key={String(user.uid)}
-                  label={`Guest ${String(user.uid)}`}
+                  label={userNames[String(user.uid)] || `Guest ${String(user.uid)}`}
                   track={user.videoTrack}
                 />
               ))}
@@ -472,6 +718,14 @@ export default function Home() {
 
         <aside className="side">
           <div className="field">
+            <label htmlFor="display-name">Your name</label>
+            <input
+              id="display-name"
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value)}
+              disabled={joined || busy}
+              maxLength={40}
+            />
             <label htmlFor="channel">Room name</label>
             <input
               id="channel"
@@ -488,6 +742,47 @@ export default function Home() {
             >
               Join Call
             </button>
+            <button className="button full" type="button" onClick={copyRoomLink} disabled={!normalizedChannelName}>
+              Copy Room Link
+            </button>
+          </div>
+
+          <div className="field">
+            <label htmlFor="microphone">Microphone</label>
+            <select
+              id="microphone"
+              value={selectedMicId}
+              onChange={(event) => setSelectedMicId(event.target.value)}
+              disabled={joined || busy}
+            >
+              {microphones.map((device, index) => (
+                <option value={device.deviceId} key={device.deviceId}>
+                  {device.label || `Microphone ${index + 1}`}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="field">
+            <label htmlFor="camera">Camera</label>
+            <select
+              id="camera"
+              value={selectedCameraId}
+              onChange={(event) => setSelectedCameraId(event.target.value)}
+              disabled={joined || busy}
+            >
+              {cameras.map((device, index) => (
+                <option value={device.deviceId} key={device.deviceId}>
+                  {device.label || `Camera ${index + 1}`}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="message compact">
+            Connection: {connectionStatus}
+            {"\n"}Network: up {getNetworkLabel(networkQuality.uplinkNetworkQuality)} / down{" "}
+            {getNetworkLabel(networkQuality.downlinkNetworkQuality)}
           </div>
 
           <button
@@ -498,6 +793,17 @@ export default function Home() {
             Start Local Recording
           </button>
           <div className="field">
+            <label htmlFor="recording-title">Recording title</label>
+            <input
+              id="recording-title"
+              value={recordingTitle}
+              onChange={(event) => setRecordingTitle(event.target.value)}
+              disabled={localRecording || busy}
+              maxLength={80}
+              placeholder="Meeting title"
+            />
+          </div>
+          <div className="field">
             <label htmlFor="recording-format">Recording format</label>
             <select
               id="recording-format"
@@ -506,8 +812,11 @@ export default function Home() {
               disabled={localRecording || busy}
             >
               <option value="webm">WebM</option>
-              <option value="mp4">MP4</option>
+              <option value="mp4">MP4{mp4Supported ? "" : " (unsupported)"}</option>
             </select>
+            {!mp4Supported ? (
+              <span className="hint">MP4 recording is not supported in this browser. WebM will be used instead.</span>
+            ) : null}
           </div>
           <button
             className="button danger full"
@@ -516,6 +825,18 @@ export default function Home() {
           >
             Stop Recording
           </button>
+          {localRecording ? (
+            <>
+              <div className="meter">
+                <span>Recording time</span>
+                <strong>{formatDuration(recordingSeconds)}</strong>
+              </div>
+              <div className="meter">
+                <span>Recording audio tracks</span>
+                <strong>{recordingAudioCount}</strong>
+              </div>
+            </>
+          ) : null}
           {recordingUrl ? (
             <a
               className="button full download"
@@ -526,14 +847,22 @@ export default function Home() {
             </a>
           ) : null}
           {recordingBlob ? (
-            <button
-              className="button full"
-              type="button"
-              onClick={uploadRecording}
-              disabled={uploading || busy}
-            >
-              {uploading ? "Uploading..." : "Upload to S3"}
-            </button>
+            <>
+              <button
+                className="button full"
+                type="button"
+                onClick={uploadRecording}
+                disabled={uploading || busy}
+              >
+                {uploading ? "Uploading..." : "Upload to S3"}
+              </button>
+              {uploading || uploadProgress > 0 ? (
+                <div className="progress" aria-label="Upload progress">
+                  <span style={{ width: `${uploadProgress}%` }} />
+                  <strong>{uploadProgress}%</strong>
+                </div>
+              ) : null}
+            </>
           ) : null}
 
           <div className="message">{message}</div>
