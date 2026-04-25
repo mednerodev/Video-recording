@@ -1,6 +1,5 @@
-import { DeleteObjectsCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { NextResponse } from "next/server";
-import { getS3Bucket, getS3Client } from "@/lib/s3";
+import { deleteBackblazeFiles, findBackblazeFile } from "@/lib/backblaze";
 
 export const runtime = "nodejs";
 
@@ -12,29 +11,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "A valid recording key is required." }, { status: 400 });
     }
 
-    const bucket = getS3Bucket();
-    const client = getS3Client();
-    const head = await client
-      .send(
-        new HeadObjectCommand({
-          Bucket: bucket,
-          Key: key,
-        }),
-      )
-      .catch(() => null);
+    const file = await findBackblazeFile(key);
     const fallbackThumbnailKey = key.replace(/\.[^.]+$/, "-thumbnail.jpg");
-    const thumbnailKey = head?.Metadata?.thumbnailkey || fallbackThumbnailKey;
+    const thumbnailKey = file?.fileInfo?.thumbnailKey || fallbackThumbnailKey;
     const keysToDelete = Array.from(new Set([key, thumbnailKey])).filter(Boolean);
-
-    await client.send(
-      new DeleteObjectsCommand({
-        Bucket: bucket,
-        Delete: {
-          Objects: keysToDelete.map((deleteKey) => ({ Key: deleteKey })),
-          Quiet: true,
-        },
-      }),
-    );
+    await deleteBackblazeFiles(keysToDelete);
 
     return NextResponse.json({ deleted: true, keys: keysToDelete });
   } catch (error) {

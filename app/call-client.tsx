@@ -62,7 +62,7 @@ function getErrorMessage(error: unknown) {
     return "Agora App Certificate is missing. Check .env.local and restart the dev server.";
   }
 
-  if (error.message.includes("AWS_")) {
+  if (error.message.includes("BACKBLAZE_")) {
     return `${error.message} Check .env.local and restart the dev server.`;
   }
 
@@ -607,7 +607,7 @@ export default function Home() {
         cleanupRecordingStream();
         recordingStreamRef.current = null;
         recorderRef.current = null;
-        setMessage("Local recording is ready. Uploading to S3...");
+        setMessage("Local recording is ready. Uploading to Backblaze...");
         uploadBlob(blob, `${normalizedChannelName || "call"}-recording.${finalFormat}`, finalFormat, thumbnail);
       };
 
@@ -699,7 +699,7 @@ export default function Home() {
     };
     request.onerror = () => {
       setUploading(false);
-      setMessage("Upload failed: network error while sending the recording to S3.");
+      setMessage("Upload failed: network error while sending the recording to Backblaze.");
     };
     request.send(formData);
   }
@@ -722,6 +722,9 @@ export default function Home() {
         <div className="status">
           <Link className="button" href="/recordings">
             Recordings
+          </Link>
+          <Link className="button" href="/s3">
+            Files
           </Link>
           <span className={`dot ${localRecording ? "recording" : joined ? "live" : ""}`} />
           {localRecording ? "Recording" : joined ? "Live" : "Offline"}
@@ -908,7 +911,7 @@ export default function Home() {
                 onClick={uploadRecording}
                 disabled={uploading || busy}
               >
-                {uploading ? "Uploading..." : "Upload to S3"}
+              {uploading ? "Uploading..." : "Upload to Backblaze"}
               </button>
               {uploading || uploadProgress > 0 ? (
                 <div className="progress" aria-label="Upload progress">

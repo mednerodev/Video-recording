@@ -1,6 +1,5 @@
-import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { NextResponse } from "next/server";
-import { getS3Bucket, getS3Client, safeName } from "@/lib/s3";
+import { getStorageBucketName, safeName, uploadBackblazeFile } from "@/lib/backblaze";
 
 export const runtime = "nodejs";
 
@@ -18,49 +17,42 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Recording file is required." }, { status: 400 });
     }
 
-    const bucket = getS3Bucket();
     const extension = safeName(file.name.split(".").pop() || "webm") || "webm";
     const key = `recordings/${channelName}/${Date.now()}-${safeName(file.name) || `recording.${extension}`}`;
     const thumbnailKey =
       thumbnail instanceof File ? key.replace(/\.[^.]+$/, "-thumbnail.jpg") : "";
 
     if (thumbnail instanceof File) {
-      await getS3Client().send(
-        new PutObjectCommand({
-          Bucket: bucket,
-          Key: thumbnailKey,
-          Body: Buffer.from(await thumbnail.arrayBuffer()),
-          ContentType: thumbnail.type || "image/jpeg",
-          Metadata: {
-            title,
-            room: channelName,
-            sourceKey: key,
-          },
-        }),
-      );
-    }
-
-    await getS3Client().send(
-      new PutObjectCommand({
-        Bucket: bucket,
-        Key: key,
-        Body: Buffer.from(await file.arrayBuffer()),
-        ContentType: file.type || `video/${extension}`,
-        Metadata: {
+      await uploadBackblazeFile({
+        key: thumbnailKey,
+        body: Buffer.from(await thumbnail.arrayBuffer()),
+        contentType: thumbnail.type || "image/jpeg",
+        fileInfo: {
           title,
           room: channelName,
-          duration,
-          format,
-          uploadedAt: new Date().toISOString(),
-          thumbnailKey,
+          sourceKey: key,
         },
-      }),
-    );
+      });
+    }
+
+    await uploadBackblazeFile({
+      key,
+      body: Buffer.from(await file.arrayBuffer()),
+      contentType: file.type || `video/${extension}`,
+      fileInfo: {
+        title,
+        room: channelName,
+        duration,
+        format,
+        uploadedAt: new Date().toISOString(),
+        thumbnailKey,
+      },
+    });
 
     return NextResponse.json({
-      bucket,
+      bucket: getStorageBucketName(),
       key,
-      s3Uri: `s3://${bucket}/${key}`,
+      s3Uri: `b2://${getStorageBucketName()}/${key}`,
     });
   } catch (error) {
     return NextResponse.json(

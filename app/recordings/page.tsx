@@ -128,7 +128,7 @@ export default function RecordingsPage() {
   }
 
   async function deleteRecording(key: string) {
-    if (!window.confirm("Delete this recording from S3?")) {
+    if (!window.confirm("Delete this recording from Backblaze?")) {
       return;
     }
 
@@ -184,11 +184,14 @@ export default function RecordingsPage() {
       <header className="topbar">
         <div className="brand">
           <h1>Recordings</h1>
-          <span>{bucket ? `S3 bucket: ${bucket}` : "S3 video library"}</span>
+          <span>{bucket ? `Backblaze bucket: ${bucket}` : "Backblaze video library"}</span>
         </div>
         <div className="toolbar">
           <Link className="button" href="/">
             Call
+          </Link>
+          <Link className="button" href="/s3">
+            Files
           </Link>
           <button className="button primary" type="button" onClick={loadRecordings} disabled={busy}>
             Refresh
