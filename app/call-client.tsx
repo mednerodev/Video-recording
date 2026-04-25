@@ -104,6 +104,19 @@ function getNetworkLabel(value?: number) {
   return "Poor";
 }
 
+function getNetworkTone(value?: number) {
+  if (!value) {
+    return "unknown";
+  }
+  if (value <= 2) {
+    return "good";
+  }
+  if (value <= 4) {
+    return "fair";
+  }
+  return "poor";
+}
+
 async function ensureMediaPermissions() {
   if (!navigator.mediaDevices?.getUserMedia) {
     throw new Error("Camera and microphone are not available in this browser.");
@@ -139,9 +152,13 @@ async function postJson<T>(url: string, body: unknown) {
 function VideoTile({
   label,
   track,
+  muted,
+  cameraOff,
 }: {
   label: string;
   track?: ICameraVideoTrack | IAgoraRTCRemoteUser["videoTrack"];
+  muted?: boolean;
+  cameraOff?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -159,7 +176,34 @@ function VideoTile({
   return (
     <div className="tile">
       <div ref={ref} />
+      <div className="tile-badges">
+        {muted ? <span className="tile-badge">Mic off</span> : null}
+        {cameraOff ? <span className="tile-badge">Cam off</span> : null}
+      </div>
       <span className="tile-label">{label}</span>
+    </div>
+  );
+}
+
+function SignalBars({
+  label,
+  value,
+}: {
+  label: string;
+  value?: number;
+}) {
+  const tone = getNetworkTone(value);
+  const activeBars = value ? Math.max(1, 6 - value) : 0;
+
+  return (
+    <div className={`signal signal-${tone}`}>
+      <span>{label}</span>
+      <div className="signal-bars" aria-label={`${label} ${getNetworkLabel(value)}`}>
+        {[1, 2, 3, 4, 5].map((bar) => (
+          <i className={bar <= activeBars ? "active" : ""} key={bar} />
+        ))}
+      </div>
+      <strong>{getNetworkLabel(value)}</strong>
     </div>
   );
 }
@@ -686,14 +730,30 @@ export default function Home() {
 
       <div className="content">
         <section className="stage">
+          <div className="stage-status">
+            <div>
+              <span className={`dot ${localRecording ? "recording" : joined ? "live" : ""}`} />
+              <strong>{connectionStatus}</strong>
+            </div>
+            <SignalBars label="Upload" value={networkQuality.uplinkNetworkQuality} />
+            <SignalBars label="Download" value={networkQuality.downlinkNetworkQuality} />
+          </div>
+
           {joined ? (
             <div className="video-grid" ref={videoGridRef}>
-              <VideoTile label={`${normalizedDisplayName} (${uid})`} track={localTracks?.videoTrack} />
+              <VideoTile
+                label={`${normalizedDisplayName} (${uid})`}
+                track={localTracks?.videoTrack}
+                muted={!micEnabled}
+                cameraOff={!cameraEnabled}
+              />
               {remoteUsers.map((user) => (
                 <VideoTile
                   key={String(user.uid)}
                   label={userNames[String(user.uid)] || `Guest ${String(user.uid)}`}
                   track={user.videoTrack}
+                  muted={!user.hasAudio}
+                  cameraOff={!user.hasVideo}
                 />
               ))}
             </div>
@@ -777,12 +837,6 @@ export default function Home() {
                 </option>
               ))}
             </select>
-          </div>
-
-          <div className="message compact">
-            Connection: {connectionStatus}
-            {"\n"}Network: up {getNetworkLabel(networkQuality.uplinkNetworkQuality)} / down{" "}
-            {getNetworkLabel(networkQuality.downlinkNetworkQuality)}
           </div>
 
           <button

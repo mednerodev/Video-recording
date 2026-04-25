@@ -112,9 +112,99 @@ a.button {
 .stage {
   padding: 22px;
   display: grid;
-  grid-template-rows: 1fr auto;
+  grid-template-rows: auto 1fr auto;
   gap: 16px;
   min-width: 0;
+}
+
+.stage-status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.stage-status > div:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: rgba(17, 21, 26, 0.72);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.signal {
+  display: inline-grid;
+  grid-template-columns: auto auto auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: rgba(17, 21, 26, 0.72);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.signal strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.signal-bars {
+  display: inline-flex;
+  align-items: end;
+  gap: 3px;
+  height: 16px;
+}
+
+.signal-bars i {
+  display: block;
+  width: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.signal-bars i:nth-child(1) {
+  height: 5px;
+}
+
+.signal-bars i:nth-child(2) {
+  height: 8px;
+}
+
+.signal-bars i:nth-child(3) {
+  height: 11px;
+}
+
+.signal-bars i:nth-child(4) {
+  height: 14px;
+}
+
+.signal-bars i:nth-child(5) {
+  height: 16px;
+}
+
+.signal-good .signal-bars i.active {
+  background: var(--accent);
+}
+
+.signal-fair .signal-bars i.active {
+  background: #f6b44b;
+}
+
+.signal-poor .signal-bars i.active {
+  background: var(--danger);
+}
+
+.signal-unknown .signal-bars i.active {
+  background: var(--muted);
 }
 
 .video-grid {
@@ -159,6 +249,26 @@ a.button {
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: var(--text);
   font-size: 12px;
+}
+
+.tile-badges {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  max-width: calc(100% - 24px);
+}
+
+.tile-badge {
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: rgba(244, 107, 97, 0.18);
+  border: 1px solid rgba(244, 107, 97, 0.32);
+  color: var(--danger-strong);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .empty {
@@ -484,6 +594,10 @@ a.button {
     border-left: 0;
     border-top: 1px solid var(--line-soft);
     box-shadow: none;
+  }
+
+  .stage-status {
+    justify-content: flex-start;
   }
 
   .recordings-content {
