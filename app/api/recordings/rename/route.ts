@@ -26,6 +26,28 @@ export async function POST(request: Request) {
     const extension = key.split(".").pop() || "webm";
     const fileName = `${Date.now()}-${safeName(title)}.${extension}`;
     const newKey = [...pathParts.slice(0, -1), fileName].join("/");
+    const thumbnailKey = head.Metadata?.thumbnailkey || key.replace(/\.[^.]+$/, "-thumbnail.jpg");
+    const newThumbnailKey = newKey.replace(/\.[^.]+$/, "-thumbnail.jpg");
+
+    if (thumbnailKey) {
+      await client
+        .send(
+          new CopyObjectCommand({
+            Bucket: bucket,
+            Key: newThumbnailKey,
+            CopySource: `${bucket}/${encodeURIComponent(thumbnailKey).replace(/%2F/g, "/")}`,
+            ContentType: "image/jpeg",
+            MetadataDirective: "REPLACE",
+            Metadata: {
+              title: title.trim().slice(0, 120),
+              room: head.Metadata?.room || "",
+              sourceKey: newKey,
+            },
+          }),
+        )
+        .then(() => client.send(new DeleteObjectCommand({ Bucket: bucket, Key: thumbnailKey })))
+        .catch(() => undefined);
+    }
 
     await client.send(
       new CopyObjectCommand({
@@ -37,6 +59,7 @@ export async function POST(request: Request) {
         Metadata: {
           ...(head.Metadata || {}),
           title: title.trim().slice(0, 120),
+          thumbnailKey: newThumbnailKey,
         },
       }),
     );
