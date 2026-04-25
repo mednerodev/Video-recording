@@ -65,6 +65,10 @@ function encodeB2HeaderValue(value: string) {
   });
 }
 
+function safeFileInfoName(value: string) {
+  return value.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 50);
+}
+
 async function b2Request<T>(
   path: string,
   body: Record<string, unknown>,
@@ -214,7 +218,11 @@ export async function uploadBackblazeFile({
     if (!value) {
       return;
     }
-    headers[`X-Bz-Info-${name}`] = encodeB2HeaderValue(String(value));
+    const safeInfoName = safeFileInfoName(name);
+    if (!safeInfoName) {
+      return;
+    }
+    headers[`X-Bz-Info-${safeInfoName}`] = encodeB2HeaderValue(String(value));
   });
 
   const response = await fetch(upload.uploadUrl, {

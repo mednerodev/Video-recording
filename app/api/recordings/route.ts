@@ -9,10 +9,14 @@ export async function GET() {
     const objects = (await listBackblazeFiles("recordings/")).filter((item) => {
       return !item.fileName.endsWith("/") && !item.fileName.endsWith(".json") && !item.fileName.endsWith("-thumbnail.jpg");
     });
+    const allFiles = await listBackblazeFiles("recordings/");
+    const fileNames = new Set(allFiles.map((file) => file.fileName));
     const recordings = await Promise.all(
       objects.map(async (item) => {
         const key = item.fileName;
-        const thumbnailKey = item.fileInfo?.thumbnailKey || "";
+        const fallbackThumbnailKey = key.replace(/\.[^.]+$/, "-thumbnail.jpg");
+        const thumbnailKey =
+          item.fileInfo?.thumbnailKey || (fileNames.has(fallbackThumbnailKey) ? fallbackThumbnailKey : "");
         const thumbnailUrl = thumbnailKey ? await getBackblazeDownloadUrl(thumbnailKey).catch(() => "") : "";
 
         return {

@@ -28,6 +28,14 @@ export async function POST(request: Request) {
     const newKey = [...pathParts.slice(0, -1), fileName].join("/");
     const thumbnailKey = file.fileInfo?.thumbnailKey || key.replace(/\.[^.]+$/, "-thumbnail.jpg");
     const newThumbnailKey = newKey.replace(/\.[^.]+$/, "-thumbnail.jpg");
+    const cleanFileInfo = {
+      title: title.trim().slice(0, 120),
+      room: file.fileInfo?.room || pathParts[1] || "",
+      duration: file.fileInfo?.duration || "0",
+      format: file.fileInfo?.format || extension,
+      uploadedAt: file.fileInfo?.uploadedAt || new Date().toISOString(),
+      thumbnailKey: newThumbnailKey,
+    };
 
     if (thumbnailKey) {
       await copyBackblazeFile({
@@ -48,11 +56,7 @@ export async function POST(request: Request) {
       sourceName: key,
       destinationName: newKey,
       contentType: file.contentType,
-      fileInfo: {
-        ...(file.fileInfo || {}),
-        title: title.trim().slice(0, 120),
-        thumbnailKey: newThumbnailKey,
-      },
+      fileInfo: cleanFileInfo,
     });
     await deleteBackblazeFiles([key]);
 

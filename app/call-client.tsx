@@ -607,7 +607,11 @@ export default function Home() {
         cleanupRecordingStream();
         recordingStreamRef.current = null;
         recorderRef.current = null;
-        setMessage("Local recording is ready. Uploading to Backblaze...");
+        setMessage(
+          thumbnail
+            ? "Local recording is ready. Uploading to Backblaze..."
+            : "Local recording is ready. Thumbnail could not be generated, uploading video only...",
+        );
         uploadBlob(blob, `${normalizedChannelName || "call"}-recording.${finalFormat}`, finalFormat, thumbnail);
       };
 
